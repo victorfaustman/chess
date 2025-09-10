@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Шахматы — конструктор позиций (v9 — фикс)</title>
+  <style>
+    :root{
+      --light: #f0d9b5;
+      --dark: #b58863;
+      --accent: #222;
+      --bg: #fafafa;
+      --boardSize: min(80vmin, 720px);
+      --target: #2ecc71;
+      --capture: #e74c3c;
+      --select: #3498db;
+      --trayW: 260px;
+      --trash: #ffcece;
+      --trashBorder: #ff7b7b;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: var(--bg); color: #111; }
+    .shell { display: grid; grid-template-rows: auto 1fr; min-height: 100dvh; }
+    header { padding: 10px 16px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; justify-content:center; background:white; border-bottom:1px solid #eee; position: sticky; top: 0; z-index: 5; }
+    button, .btn { padding:10px 14px; border-radius:10px; border:1px solid #ddd; background:white; cursor:pointer; font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.05); }
+    button:active { transform: translateY(1px); }
+    input[type="text"] { padding:10px 12px; border-radius:10px; border:1px solid #ddd; min-width: 260px; }
+    .main { display:grid; grid-template-columns: 1fr var(--trayW); gap:12px; padding:16px; align-items:start; justify-items:center; }
+    .board-wrap { position:relative; user-select:none; -webkit-user-select:none; width: calc(var(--boardSize) + 56px); }
+    .labels { position:absolute; font-size:12px; color:#111; letter-spacing:1px; font-weight:600; pointer-events:none; }
+    .files-top, .files-bottom { left:28px; right:28px; display:flex; justify-content:space-between; }
+    .files-top { top: 2px; } .files-bottom { bottom:2px; }
+    .ranks-left, .ranks-right { top:28px; bottom:28px; display:flex; flex-direction:column; justify-content:space-between; align-items:center; }
+    .ranks-left { left:4px; } .ranks-right { right:4px; }
+    .board { width: var(--boardSize); height: var(--boardSize); margin: 28px; display:grid; grid-template-columns:repeat(8,1fr); grid-template-rows:repeat(8,1fr); border:8px solid var(--accent); border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,.15); background:var(--light); position:relative; overflow:hidden; }
+    .square { position:relative; display:grid; place-items:center; font-size: clamp(28px, 7.5vmin, 64px); line-height:1; }
+    .square.dark { background: var(--dark); } .square.light { background: var(--light); }
+    .piece { pointer-events:auto; }
+    .piece.white { color:#fff; } .piece.black { color:#000; }
+    .dragging { position:fixed; z-index:10; font-size: clamp(28px, 7.5vmin, 64px); line-height:1; pointer-events:none; transform: translate(-50%,-50%); }
+    .dragging.white { color:#fff; } .dragging.black { color:#000; }
+    .square.selected::after { content:""; position:absolute; inset:4px; border:3px solid var(--select); border-radius:6px; }
+    .square .dot { position:absolute; width:26%; height:26%; border-radius:50%; background:var(--target); opacity:.92; box-shadow:0 0 0 2px rgba(0,0,0,.15); }
+    .square.capture .dot { background: var(--capture); }
+    aside.tray { width:var(--trayW); background:white; border:1px solid #eee; border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,.06); padding:12px; position:sticky; top:74px; }
+    .tray h3 { margin:6px 0 10px; font-size:14px; color:#444; text-transform:uppercase; letter-spacing:.08em; }
+    .tray .grid { display:grid; grid-template-columns:repeat(6,1fr); gap:6px; margin-bottom:10px; }
+    .swatch { display:grid; place-items:center; aspect-ratio:1/1; border:1px dashed #ddd; border-radius:10px; cursor:grab; font-size:28px; user-select:none; }
+    .swatch.white { color:#000; background:#f7f7f7; } .swatch.black { color:#000; background:#e6e6e6; }
+    .legend { font-size:12px; color:#666; margin-top:8px; line-height:1.4; }
+    .trash { margin-top:10px; padding:10px; border:2px dashed var(--trashBorder); background:var(--trash); border-radius:12px; text-align:center; font-weight:700; color:#a40000; }
+    .trash.dragover { background:#ffdada; border-color:#ff4d4d; }
+    footer { text-align:center; font-size:12px; color:#666; padding:10px 0 16px; }
+    .flipped .board { transform: rotate(180deg); } .flipped .square .piece { transform: rotate(180deg); }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <button id="flipBtn">Перевернуть</button>
+      <button id="resetBtn" title="Начальная позиция">Начальная</button>
+      <button id="clearBtn" title="Очистить доску">Очистить</button>
+      <button id="fenSaveBtn" title="Скопировать FEN и скачать .fen">Сохранить FEN</button>
+      <input id="fenInput" type="text" placeholder="Вставьте FEN и нажмите Загрузить" />
+      <button id="fenLoadBtn" title="Загрузить FEN из поля">Загрузить FEN</button>
+      <button id="fenFileBtn" title="Загрузить FEN из файла">FEN-файл</button>
+      <input id="fenFile" type="file" accept=".fen,text/plain" style="display:none">
+      <button id="pngBtn" title="Скачать картинку текущей позиции">PNG</button>
+    </header>
+
+    <div class="main">
+      <div id="wrap" class="board-wrap">
+        <div class="labels files-top" id="filesTop"></div>
+        <div class="labels files-bottom" id="filesBottom"></div>
+        <div class="labels ranks-left" id="ranksLeft"></div>
+        <div class="labels ranks-right" id="ranksRight"></div>
+        <div id="board" class="board" aria-label="Шахматная доска"></div>
+      </div>
+
+      <aside class="tray" id="tray">
+        <h3>Белые</h3>
+        <div class="grid" id="whiteGrid"></div>
+        <h3>Чёрные</h3>
+        <div class="grid" id="blackGrid"></div>
+        <div class="trash" id="trash">Перетащите сюда, чтобы удалить</div>
+        <div class="legend">
+          • Клик по фигуре — точки → клик по клетке/фигуре — ход или взятие.<br>
+          • Перетаскивание с порогом движения; «Корзина» для удаления.<br>
+          • Палитра: по одной иконке каждого типа; перетаскивайте, сколько нужно.
+        </div>
+      </aside>
+    </div>
+
+    <footer>v9 — убран режим «Удаление», компактная палитра (6 фигур на цвет).</footer>
+  </div>
+
+<script>
+(function(){
+  // DOM
+  var boardEl = document.getElementById('board');
+  var wrapEl = document.getElementById('wrap');
+  var flipBtn = document.getElementById('flipBtn');
+  var resetBtn = document.getElementById('resetBtn');
+  var clearBtn = document.getElementById('clearBtn');
+  var fenSaveBtn = document.getElementById('fenSaveBtn');
+  var fenInput = document.getElementById('fenInput');
+  var fenLoadBtn = document.getElementById('fenLoadBtn');
+  var fenFileBtn = document.getElementById('fenFileBtn');
+  var fenFile = document.getElementById('fenFile');
+  var pngBtn = document.getElementById('pngBtn');
+  var whiteGrid = document.getElementById('whiteGrid');
+  var blackGrid = document.getElementById('blackGrid');
+  var trashEl = document.getElementById('trash');
+  var filesTop = document.getElementById('filesTop');
+  var filesBottom = document.getElementById('filesBottom');
+  var ranksLeft = document.getElementById('ranksLeft');
+  var ranksRight = document.getElementById('ranksRight');
+
+  // State
+  var FILES = ['a','b','c','d','e','f','g','h'];
+  var RANKS = ['1','2','3','4','5','6','7','8'];
+
+  function renderLabels(flipped) {
+    filesTop.innerHTML = ''; filesBottom.innerHTML = '';
+    ranksLeft.innerHTML = ''; ranksRight.innerHTML = '';
+    var f = flipped ? FILES.slice().reverse() : FILES;
+    var r = flipped ? RANKS.slice() : RANKS.slice().reverse();
+    for (var i=0;i<f.length;i++) {
+      var a=document.createElement('span'); a.textContent=f[i]; filesTop.appendChild(a);
+      var b=document.createElement('span'); b.textContent=f[i]; filesBottom.appendChild(b);
+    }
+    for (var j=0;j<r.length;j++) {
+      var l=document.createElement('span'); l.textContent=r[j]; ranksLeft.appendChild(l);
+      var rr=document.createElement('span'); rr.textContent=r[j]; ranksRight.appendChild(rr);
+    }
+  }
+
+  var P = {'wK':'\u2654','wQ':'\u2655','wR':'\u2656','wB':'\u2657','wN':'\u2658','wP':'\u2659','bK':'\u265A','bQ':'\u265B','bR':'\u265C','bB':'\u265D','bN':'\u265E','bP':'\u265F'};
+
+  var squares = [];
+  for (var r = 8; r >= 1; r--) {
+    for (var f = 1; f <= 8; f++) {
+      var sq = document.createElement('div');
+      sq.className = 'square ' + (((r + f) % 2 === 0) ? 'dark' : 'light');
+      sq.dataset.file = f; sq.dataset.rank = r;
+      boardEl.appendChild(sq); squares.push(sq);
+    }
+  }
+
+  function getSquare(file, rank) {
+    for (var i=0;i<squares.length;i++) {
+      var s = squares[i];
+      if (+s.dataset.file===file && +s.dataset.rank===rank) return s;
+    }
+    return null;
+  }
+  function pieceAt(file, rank) {
+    var sq = getSquare(file, rank); if (!sq) return null;
+    var p = sq.querySelector('.piece'); return p ? p.dataset.piece : null;
+  }
+  function clearBoard() { for (var i=0;i<squares.length;i++) { var p = squares[i].querySelector('.piece'); if (p) p.remove(); } }
+  function placePiece(file, rank, code) {
+    var sq = getSquare(file, rank); if (!sq) return;
+    var glyph = P[code]; if (!glyph) return;
+    var el = document.createElement('div');
+    el.className = 'piece ' + (code[0]==='w'?'white':'black');
+    el.textContent = glyph; el.dataset.piece = code; sq.appendChild(el);
+  }
+  function inBounds(f, r) { return f>=1 && f<=8 && r>=1 && r<=8; }
+
+  function setupInitial() {
+    clearBoard();
+    var back = ['wR','wN','wB','wQ','wK','wB','wN','wR'];
+    for (var f=1; f<=8; f++) placePiece(f,1,back[f-1]);
+    for (var f2=1; f2<=8; f2++) placePiece(f2,2,'wP');
+    for (var f3=1; f3<=8; f3++) placePiece(f3,7,'bP');
+    var backB = ['bR','bN','bB','bQ','bK','bB','bN','bR'];
+    for (var f4=1; f4<=8; f4++) placePiece(f4,8,backB[f4-1]);
+    clearSelection();
+  }
+
+  renderLabels(false);
+  setupInitial();
+  buildTray();
+
+  function buildTray() {
+    // compact palette: one of each
+    var white = ['wK','wQ','wR','wB','wN','wP'];
+    var black = ['bK','bQ','bR','bB','bN','bP'];
+    fill(whiteGrid, white); fill(blackGrid, black);
+    function fill(grid, arr) {
+      grid.innerHTML='';
+      for (var i=0;i<arr.length;i++) {
+        var code = arr[i];
+        var sw = document.createElement('div');
+        sw.className = 'swatch ' + (code[0]==='w'?'white':'black');
+        sw.dataset.piece = code; sw.textContent = P[code];
+        grid.appendChild(sw);
+      }
+    }
+  }
+
+  // Selection & targets
+  var selection = null;
+  function clearSelection() {
+    selection = null;
+    for (var i=0;i<squares.length;i++) {
+      var s=squares[i];
+      s.classList.remove('selected','capture');
+      var d = s.querySelector('.dot'); if (d) d.remove();
+    }
+  }
+  function addDot(sq, capture) {
+    var dot = document.createElement('div'); dot.className='dot';
+    if (capture) sq.classList.add('capture');
+    sq.appendChild(dot);
+  }
+  function selectAt(file, rank) {
+    clearSelection();
+    var code = pieceAt(file, rank); if (!code) return;
+    selection = {file:file, rank:rank, code:code, targets: computeTargets(file, rank, code)};
+    var fromSq = getSquare(file, rank); fromSq.classList.add('selected');
+    for (var i=0;i<selection.targets.length;i++) {
+      var t = selection.targets[i];
+      var sq = getSquare(t.f, t.r);
+      addDot(sq, t.capture);
+    }
+  }
+  function sameColor(a, b) { return a && b && a[0]===b[0]; }
+  function addSlide(list, f, r, df, dr, color) {
+    var x=f+df, y=r+dr;
+    while (inBounds(x,y)) {
+      var occ = pieceAt(x,y);
+      if (!occ) list.push({f:x,r:y,capture:false});
+      else { if (!sameColor(color+'X', occ)) list.push({f:x,r:y,capture:true}); break; }
+      x+=df; y+=dr;
+    }
+  }
+  function computeTargets(file, rank, code) {
+    var t=[]; var isW = code[0]==='w'; var kind = code[1];
+    if (kind==='P') {
+      var dir = isW?1:-1, startRank = isW?2:7;
+      if (inBounds(file,rank+dir) && !pieceAt(file,rank+dir)) {
+        t.push({f:file, r:rank+dir, capture:false});
+        if (rank===startRank && !pieceAt(file,rank+2*dir)) t.push({f:file, r:rank+2*dir, capture:false});
+      }
+      for (var df=-1; df<=1; df+=2) {
+        var ff=file+df, rr=rank+dir;
+        if (inBounds(ff,rr)) { var occ = pieceAt(ff,rr); if (occ && !sameColor(code,occ)) t.push({f:ff,r:rr,capture:true}); }
+      }
+    }
+    if (kind==='N') {
+      var jumps=[[1,2],[2,1],[-1,2],[-2,1],[1,-2],[2,-1],[-1,-2],[-2,-1]];
+      for (var i=0;i<jumps.length;i++) {
+        var j=jumps[i], x=file+j[0], y=rank+j[1]; if (!inBounds(x,y)) continue;
+        var occ2 = pieceAt(x,y); if (!occ2) t.push({f:x,r:y,capture:false}); else if (!sameColor(code,occ2)) t.push({f:x,r:y,capture:true});
+      }
+    }
+    if (kind==='B'||kind==='Q') { addSlide(t,file,rank,1,1,code[0]); addSlide(t,file,rank,1,-1,code[0]); addSlide(t,file,rank,-1,1,code[0]); addSlide(t,file,rank,-1,-1,code[0]); }
+    if (kind==='R'||kind==='Q') { addSlide(t,file,rank,1,0,code[0]); addSlide(t,file,rank,-1,0,code[0]); addSlide(t,file,rank,0,1,code[0]); addSlide(t,file,rank,0,-1,code[0]); }
+    if (kind==='K') {
+      for (var dx=-1; dx<=1; dx++) for (var dy=-1; dy<=1; dy++) {
+        if (!dx && !dy) continue; var xk=file+dx, yk=rank+dy; if (!inBounds(xk,yk)) continue;
+        var occ3 = pieceAt(xk,yk); if (!occ3) t.push({f:xk,r:yk,capture:false}); else if (!sameColor(code,occ3)) t.push({f:xk,r:yk,capture:true});
+      }
+    }
+    return t;
+  }
+
+  function handleBoardClick(e) {
+    var sq = e.target.closest('.square'); if (!sq) return;
+    var f = +sq.dataset.file, r = +sq.dataset.rank;
+    if (selection) {
+      for (var i=0;i<selection.targets.length;i++) {
+        var m = selection.targets[i];
+        if (m.f===f && m.r===r) {
+          var code = selection.code;
+          var tp = sq.querySelector('.piece'); if (tp) tp.remove();
+          var fromSq = getSquare(selection.file, selection.rank);
+          var sp = fromSq.querySelector('.piece'); if (sp) sp.remove();
+          placePiece(f, r, code); clearSelection(); return;
+        }
+      }
+      var occ = pieceAt(f, r);
+      if (occ && occ[0]===selection.code[0]) { selectAt(f, r); return; }
+      clearSelection();
+      return;
+    }
+    var occ2 = pieceAt(f, r);
+    if (occ2) selectAt(f, r);
+  }
+
+  // Drag with threshold (to keep clicks as clicks)
+  var drag = null;
+  var pending = null;
+  var DRAG_T = 4;
+  function onPointerDownBoard(e) {
+    var sq = e.target.closest('.square'); if (!sq) return;
+    var pieceEl = sq.querySelector('.piece'); if (!pieceEl) return;
+    var code = pieceEl.dataset.piece;
+    pending = { code: code, fromSquare: sq, startX: e.clientX, startY: e.clientY };
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp, { once: true });
+  }
+  function startDragFromPending(e) {
+    if (!pending) return;
+    drag = { code: pending.code, from: 'board', fromSquare: pending.fromSquare, ghostEl: document.createElement('div') };
+    drag.fromFile = +pending.fromSquare.dataset.file; drag.fromRank = +pending.fromSquare.dataset.rank;
+    pending.fromSquare.querySelector('.piece').remove();
+    drag.ghostEl.className = 'dragging ' + (drag.code[0]==='w'?'white':'black');
+    drag.ghostEl.textContent = P[drag.code];
+    document.body.appendChild(drag.ghostEl);
+    moveGhost(e.clientX, e.clientY);
+    clearSelection();
+  }
+  function onPointerMove(e) {
+    if (pending && !drag) {
+      var dx = e.clientX - pending.startX, dy = e.clientY - pending.startY;
+      if (Math.abs(dx) >= DRAG_T || Math.abs(dy) >= DRAG_T) startDragFromPending(e);
+      return;
+    }
+    if (drag) {
+      moveGhost(e.clientX, e.clientY);
+      toggleTrash(e.clientX, e.clientY, true);
+    }
+  }
+  function onPointerUp(e) {
+    if (!drag && pending) { cleanupPending(); return; } // treat as click
+    if (drag) {
+      var overTrash = toggleTrash(e.clientX, e.clientY, true);
+      var targetSq = squareFromPoint(e.clientX, e.clientY);
+      trashEl.classList.remove('dragover');
+      if (overTrash) {
+        // delete
+      } else if (targetSq) {
+        var old = targetSq.querySelector('.piece'); if (old) old.remove();
+        placePiece(+targetSq.dataset.file, +targetSq.dataset.rank, drag.code);
+      } else {
+        placePiece(drag.fromFile, drag.fromRank, drag.code);
+      }
+      drag.ghostEl.remove(); drag=null;
+    }
+    cleanupPending();
+  }
+  function cleanupPending() {
+    pending = null;
+    window.removeEventListener('pointermove', onPointerMove);
+  }
+  function moveGhost(x,y){ drag.ghostEl.style.left = x+'px'; drag.ghostEl.style.top = y+'px'; }
+  function toggleTrash(x,y,hovering) {
+    var rect = trashEl.getBoundingClientRect();
+    var over = x>=rect.left && x<=rect.right && y>=rect.top && y<=rect.bottom;
+    if (hovering) trashEl.classList.toggle('dragover', over);
+    return over;
+  }
+  function squareFromPoint(clientX, clientY) {
+    var rect = boardEl.getBoundingClientRect();
+    if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return null;
+    var x = clientX - rect.left, y = clientY - rect.top;
+    var cellW = rect.width/8, cellH = rect.height/8;
+    var file = Math.floor(x / cellW) + 1;
+    var rank = 8 - Math.floor(y / cellH);
+    if (wrapEl.classList.contains('flipped')) { file = 9-file; rank = 9-rank; }
+    if (!inBounds(file,rank)) return null;
+    return getSquare(file,rank);
+  }
+
+  // FEN export/import
+  function exportFEN() {
+    var map = {};
+    for (var i=0;i<squares.length;i++) {
+      var sq = squares[i];
+      var p = sq.querySelector('.piece');
+      if (p) map[sq.dataset.file+','+sq.dataset.rank] = p.dataset.piece;
+    }
+    var codeToFen = { wK:'K', wQ:'Q', wR:'R', wB:'B', wN:'N', wP:'P', bK:'k', bQ:'q', bR:'r', bB:'b', bN:'n', bP:'p' };
+    var ranks = [];
+    for (var r2=8; r2>=1; r2--) {
+      var row='', empty=0;
+      for (var f2=1; f2<=8; f2++) {
+        var key=f2+','+r2;
+        if (map[key]) { if (empty) { row+=empty; empty=0; } row += codeToFen[map[key]]||''; }
+        else empty++;
+      }
+      if (empty) row+=empty;
+      ranks.push(row);
+    }
+    return ranks.join('/') + ' w - - 0 1';
+  }
+  function importFEN(fen) {
+    try {
+      var part = fen.trim().split(/\s+/)[0];
+      var rows = part.split('/'); if (rows.length!==8) throw 0;
+      clearBoard();
+      for (var r3=8; r3>=1; r3--) {
+        var row = rows[8-r3]; var f3=1;
+        for (var k=0;k<row.length;k++) {
+          var ch=row[k];
+          if (/[1-8]/.test(ch)) { f3 += +ch; }
+          else {
+            var color = ch===ch.toUpperCase() ? 'w':'b';
+            var code = color + ch.toUpperCase();
+            placePiece(f3, r3, code); f3++;
+          }
+        }
+      }
+      clearSelection();
+    } catch(err) { alert('Не удалось загрузить FEN. Проверьте строку.'); }
+  }
+
+  // PNG
+  function downloadPNG() {
+    var size=1024, margin=64, boardSize=size-margin*2, cell=boardSize/8;
+    var canvas=document.createElement('canvas'); canvas.width=size; canvas.height=size;
+    var ctx=canvas.getContext('2d');
+    ctx.fillStyle='#fafafa'; ctx.fillRect(0,0,size,size);
+    ctx.fillStyle='#222'; ctx.fillRect(margin-8, margin-8, boardSize+16, boardSize+16);
+    for (var r=0;r<8;r++) for (var f=0; f<8; f++) {
+      var isDark=((r+1)+(f+1))%2===0; ctx.fillStyle=isDark?'#b58863':'#f0d9b5';
+      ctx.fillRect(margin+f*cell, margin+r*cell, cell, cell);
+    }
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.font='bold '+Math.floor(cell*0.72)+'px "Segoe UI Symbol","Noto Color Emoji","Apple Color Emoji","Arial Unicode MS",sans-serif';
+    var glyphOf=P;
+    for (var rr=8; rr>=1; rr--) for (var ff=1; ff<=8; ff++) {
+      var p = getSquare(ff,rr).querySelector('.piece'); if (!p) continue;
+      var code=p.dataset.piece, glyph=glyphOf[code];
+      var cx=margin+(ff-1+0.5)*cell, cy=margin+(8-rr+0.5)*cell;
+      ctx.fillStyle = code[0]==='w' ? '#fff' : '#000'; ctx.fillText(glyph, cx, cy);
+    }
+    ctx.fillStyle='#111'; ctx.font='bold '+Math.floor(cell*0.22)+'px system-ui, sans-serif';
+    var files=FILES, ranks=['8','7','6','5','4','3','2','1'];
+    for (var i=0;i<files.length;i++) {
+      ctx.fillText(files[i], margin+(i+0.5)*cell, margin+boardSize+cell*0.15);
+      ctx.fillText(files[i], margin+(i+0.5)*cell, margin-cell*0.15);
+    }
+    for (var j=0;j<ranks.length;j++) {
+      ctx.fillText(ranks[j], margin-cell*0.15, margin+(j+0.5)*cell);
+      ctx.fillText(ranks[j], margin+boardSize+cell*0.15, margin+(j+0.5)*cell);
+    }
+    var a=document.createElement('a'); a.download='chess-position.png'; a.href=canvas.toDataURL('image/png'); document.body.appendChild(a); a.click(); a.remove();
+  }
+
+  // UI wiring
+  flipBtn.addEventListener('click', function(){
+    var flipped = !wrapEl.classList.contains('flipped');
+    wrapEl.classList.toggle('flipped'); renderLabels(flipped); clearSelection();
+  });
+  resetBtn.addEventListener('click', setupInitial);
+  clearBtn.addEventListener('click', function(){ clearBoard(); clearSelection(); });
+  fenSaveBtn.addEventListener('click', function(){
+    var fen = exportFEN();
+    try { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(fen); } catch(e){}
+    var blob = new Blob([fen], {type:'text/plain;charset=utf-8'});
+    var url = URL.createObjectURL(blob);
+    var a=document.createElement('a'); a.href=url; a.download='position.fen'; document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  });
+  fenLoadBtn.addEventListener('click', function(){ var fen = fenInput.value.trim(); if (fen) importFEN(fen); });
+  fenFileBtn.addEventListener('click', function(){ fenFile.click(); });
+  fenFile.addEventListener('change', function(){ var file=fenFile.files[0]; if (!file) return; var reader=new FileReader(); reader.onload=function(){ importFEN(reader.result||''); fenFile.value=''; }; reader.readAsText(file); });
+  pngBtn.addEventListener('click', downloadPNG);
+
+  boardEl.addEventListener('click', handleBoardClick);
+  boardEl.addEventListener('pointerdown', onPointerDownBoard);
+  function startPaletteDrag(e, code){
+    drag = { code: code, from:'palette', ghostEl: document.createElement('div') };
+    drag.ghostEl.className = 'dragging ' + (drag.code[0]==='w'?'white':'black');
+    drag.ghostEl.textContent = P[drag.code];
+    document.body.appendChild(drag.ghostEl);
+    moveGhost(e.clientX, e.clientY);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp, { once: true });
+  }
+  whiteGrid.addEventListener('pointerdown', function(e){ var sw = e.target.closest('.swatch'); if (!sw) return; startPaletteDrag(e, sw.dataset.piece); });
+  blackGrid.addEventListener('pointerdown', function(e){ var sw = e.target.closest('.swatch'); if (!sw) return; startPaletteDrag(e, sw.dataset.piece); });
+
+  function squareFromPoint(clientX, clientY) {
+    var rect = boardEl.getBoundingClientRect();
+    if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return null;
+    var x = clientX - rect.left, y = clientY - rect.top;
+    var cellW = rect.width/8, cellH = rect.height/8;
+    var file = Math.floor(x / cellW) + 1;
+    var rank = 8 - Math.floor(y / cellH);
+    if (wrapEl.classList.contains('flipped')) { file = 9-file; rank = 9-rank; }
+    if (!inBounds(file,rank)) return null;
+    return getSquare(file,rank);
+  }
+})();
+</script>
+</body>
+</html>
